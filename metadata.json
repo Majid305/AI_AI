@@ -1,0 +1,7 @@
+{
+  "name": "AI_AI",
+  "description": "Assistant IA pour Avis d’Incident et Rapports d’Enquête",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

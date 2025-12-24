@@ -1,0 +1,18 @@
+{
+  "name": "Avisapp AI",
+  "short_name": "Avisapp",
+  "description": "Assistant IA pour Avis d’Incident et Rapports d’Enquête",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#FF6B00",
+  "theme_color": "#FF6B00",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
