@@ -1,8 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Upload, Loader2, Save, RefreshCw, Wand2, Paperclip, X, FileText, ShieldAlert, Sparkles, BellRing, MapPin, Calendar, Hash, Tag, Clock, CalendarDays, Timer } from 'lucide-react';
+import { Camera, Upload, Loader2, Save, RefreshCw, Wand2, Paperclip, X, FileText, ShieldAlert, Sparkles, BellRing, MapPin, Calendar, Hash, Tag, Clock, CalendarDays, Timer, Zap } from 'lucide-react';
 import { DocumentData, DocStatus, IncidentType } from '../types';
-import { analyzeIncident } from '../services/geminiService';
+import { analyzeIncident, updateRapportFromAvis, reviseAvisFields } from '../services/geminiService';
 import { saveDocument, getAllDocuments } from '../services/db';
 
 interface ScannerProps {
@@ -18,16 +18,20 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
   const [userText, setUserText] = useState("");
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [revisingAvis, setRevisingAvis] = useState(false);
+  const [updatingRapport, setUpdatingRapport] = useState(false);
   
   const [showForm, setShowForm] = useState(!!initialData);
+
+  const todayStr = new Date().toISOString().split('T')[0];
 
   const [formData, setFormData] = useState<Partial<DocumentData> | null>(initialData || {
     id: "Génération...",
     fait_a: "Tahannaout",
-    fait_le: new Date().toISOString().split('T')[0],
+    fait_le: todayStr,
     statut: DocStatus.SUIVRE,
     nature_incident: IncidentType.AUTRE,
-    date_iso: new Date().toISOString().split('T')[0],
+    date_iso: todayStr,
     rappel_details: "",
     rappel_date: ""
   });
@@ -44,7 +48,7 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
   }, [formData?.date_iso, showForm]);
 
   const updateAutomaticId = async () => {
-    const dateStr = formData?.date_iso || new Date().toISOString().split('T')[0];
+    const dateStr = formData?.date_iso || todayStr;
     const nextId = await calculateNextSRMId(dateStr);
     setFormData(prev => prev ? { ...prev, id: nextId } : null);
   };
@@ -71,7 +75,6 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
 
       return `${prefix}${maxN + 1}`;
     } catch (e) {
-      console.error("Erreur calcul ID", e);
       return `SRM-MS/DPH/AI-${new Date().getTime()}`;
     }
   };
@@ -95,7 +98,10 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
     }
   };
 
-  const performAnalysis = async () => {
+  /**
+   * Analyse initiale à partir de l'image/PDF et des notes utilisateur
+   */
+  const performInitialAnalysis = async () => {
     setAnalyzing(true);
     try {
       const result = await analyzeIncident(fileData, mimeType, userText);
@@ -103,9 +109,9 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
         ...prev, 
         ...result,
         id: prev?.id && prev.id !== "Génération..." ? prev.id : "Génération...",
-        fait_a: prev?.fait_a || "Tahannaout",
-        fait_le: result.fait_le || prev?.fait_le || new Date().toISOString().split('T')[0],
-        date_iso: result.date_iso || prev?.date_iso
+        fait_a: result.fait_a || prev?.fait_a || "Tahannaout",
+        fait_le: result.fait_le || prev?.fait_le || todayStr,
+        date_iso: result.date_iso || prev?.date_iso || todayStr
       }));
       setShowForm(true);
     } catch (err: any) {
@@ -113,6 +119,44 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
       setShowForm(true); 
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  /**
+   * Révision intelligente : Correction orthographique et reformulation administrative.
+   * Ne touche qu'aux champs textuels saisis.
+   */
+  const handleAvisRevisionIA = async () => {
+    if (!formData) return;
+    setRevisingAvis(true);
+    try {
+      const revisedData = await reviseAvisFields(formData);
+      setFormData(prev => ({ 
+        ...prev, 
+        ...revisedData,
+        // On s'assure de garder les champs techniques
+        id: prev?.id,
+        date_iso: prev?.date_iso,
+        fait_le: prev?.fait_le,
+        nature_incident: prev?.nature_incident
+      }));
+    } catch (err: any) {
+      alert(`Erreur de révision : ${err?.message}`);
+    } finally {
+      setRevisingAvis(false);
+    }
+  };
+
+  const handleRapportIAUpdate = async () => {
+    if (!formData) return;
+    setUpdatingRapport(true);
+    try {
+      const rapportUpdates = await updateRapportFromAvis(formData);
+      setFormData(prev => ({ ...prev, ...rapportUpdates }));
+    } catch (err: any) {
+      alert(`Erreur IA Rapport : ${err?.message}`);
+    } finally {
+      setUpdatingRapport(false);
     }
   };
 
@@ -134,7 +178,7 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
         rappel_date: formData.rappel_date || "",
         rappel_details: formData.rappel_details || "",
         fait_a: formData.fait_a || "Tahannaout",
-        fait_le: formData.fait_le || new Date().toISOString().split('T')[0],
+        fait_le: formData.fait_le || todayStr,
         created_at: initialData?.created_at && !initialData.id.startsWith("TEMP") ? initialData.created_at : Date.now()
       };
 
@@ -188,7 +232,7 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
 
           <div className="flex flex-col gap-2 mt-auto">
             <button 
-              onClick={performAnalysis}
+              onClick={performInitialAnalysis}
               disabled={!fileData && !userText.trim()}
               className="w-full bg-brand text-white py-4 rounded-2xl font-black text-xs flex items-center justify-center gap-3 shadow-xl disabled:opacity-30 active:scale-95 transition-all"
             >
@@ -217,12 +261,24 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
     <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-950 relative">
       <div className="flex-1 overflow-y-auto pb-36">
         <div className="p-4 space-y-8">
+          {/* SECTION 1 - AVIS D'INCIDENT */}
           <section className="space-y-4">
-            <h4 className="text-xs font-black text-brand uppercase tracking-widest border-b-2 border-brand/10 pb-1">1. AVIS D'INCIDENT</h4>
+            <div className="flex items-center justify-between border-b-2 border-brand/10 pb-1">
+              <h4 className="text-xs font-black text-brand uppercase tracking-widest">1. AVIS D'INCIDENT</h4>
+              <button 
+                onClick={handleAvisRevisionIA}
+                disabled={revisingAvis}
+                className="p-1.5 bg-brand/10 text-brand rounded-lg hover:bg-brand/20 transition-all flex items-center gap-1.5 px-2 disabled:opacity-50"
+                title="Corriger et reformuler professionnellement les champs actuels"
+              >
+                {revisingAvis ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} fill="currentColor"/>}
+                <span className="text-[9px] font-black uppercase">{revisingAvis ? "Révision..." : "Réviser"}</span>
+              </button>
+            </div>
             
             <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border-2 border-brand/20 shadow-sm">
               <label className="block text-[9px] font-black text-brand uppercase mb-1 tracking-widest">Numéro d'Avis Officiel</label>
-              <input className="w-full bg-transparent font-black text-slate-900 dark:text-white text-base outline-none" value={formData?.id || ""} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, id: e.target.value})} />
+              <input className="w-full bg-transparent font-black text-slate-900 dark:text-white text-base outline-none" value={formData?.id || ""} onChange={(e) => setFormData({...formData, id: e.target.value})} />
             </div>
 
             <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
@@ -251,20 +307,20 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
                 <input 
                   type="date"
                   className="w-full bg-white dark:bg-slate-950 p-4 rounded-2xl font-black outline-none dark:text-white text-sm border-2 border-blue-100 dark:border-blue-900 focus:border-blue-500 transition-all text-center" 
-                  value={formData?.date_iso || ""} 
+                  value={formData?.date_iso || todayStr} 
                   onChange={(e) => setFormData({...formData, date_iso: e.target.value})} 
                 />
               </div>
             </div>
             
-            <Field label="Victime ou objet du sinistre" value={formData?.victime_objet} onChange={(v: string) => setFormData({...formData, victime_objet: v})} />
-            <Field label="Description du sinistre" value={formData?.description_sinistre} onChange={(v: string) => setFormData({...formData, description_sinistre: v})} />
-            <Field label="Lieu, date et heure du sinistre" value={formData?.lieu_date_heure} onChange={(v: string) => setFormData({...formData, lieu_date_heure: v})} />
-            <Field label="Dommages (nature et évaluation)" value={formData?.dommages} onChange={(v: string) => setFormData({...formData, dommages: v})} />
+            <Field label="Victime ou objet du sinistre" value={formData?.victime_objet} onChange={(v) => setFormData({...formData, victime_objet: v})} />
+            <Field label="Description du sinistre" value={formData?.description_sinistre} onChange={(v) => setFormData({...formData, description_sinistre: v})} />
+            <Field label="Lieu, date et heure du sinistre" value={formData?.lieu_date_heure} onChange={(v) => setFormData({...formData, lieu_date_heure: v})} />
+            <Field label="Dommages (nature et évaluation)" value={formData?.dommages} onChange={(v) => setFormData({...formData, dommages: v})} />
             
             <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
               <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Causes et circonstances</label>
-              <textarea className="w-full bg-transparent font-bold outline-none dark:text-white text-xs mb-4" rows={4} value={formData?.causes_circonstances || ""} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setFormData({...formData, causes_circonstances: e.target.value})} />
+              <textarea className="w-full bg-transparent font-bold outline-none dark:text-white text-xs mb-4" rows={4} value={formData?.causes_circonstances || ""} onChange={(e) => setFormData({...formData, causes_circonstances: e.target.value})} />
               <div className="flex gap-2 overflow-x-auto pb-2">
                 {auxImages.map((img, i) => (
                   <div key={i} className="relative w-24 h-24 rounded-2xl overflow-hidden shrink-0 shadow-lg">
@@ -282,13 +338,13 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
               <input type="file" accept="image/*" className="hidden" ref={auxInputRef} onChange={handleAuxImage} />
             </div>
 
-            <Field label="Responsabilités" value={formData?.responsabilites} onChange={(v: string) => setFormData({...formData, responsabilites: v})} />
-            <Field label="Mesures prises" value={formData?.mesures_prises} onChange={(v: string) => setFormData({...formData, mesures_prises: v})} />
-            <Field label="Références autorites" value={formData?.references_autorites} onChange={(v: string) => setFormData({...formData, references_autorites: v})} />
-            <Field label="Observations" value={formData?.observations} onChange={(v: string) => setFormData({...formData, observations: v})} />
+            <Field label="Responsabilités" value={formData?.responsabilites} onChange={(v) => setFormData({...formData, responsabilites: v})} />
+            <Field label="Mesures prises" value={formData?.mesures_prises} onChange={(v) => setFormData({...formData, mesures_prises: v})} />
+            <Field label="Références autorites" value={formData?.references_autorites} onChange={(v) => setFormData({...formData, references_autorites: v})} />
+            <Field label="Observations" value={formData?.observations} onChange={(v) => setFormData({...formData, observations: v})} />
             
             <div className="grid grid-cols-1 gap-4 bg-slate-100 dark:bg-slate-900/50 p-4 rounded-[2rem] border border-slate-200 dark:border-slate-800">
-               <Field icon={<MapPin size={14} className="text-orange-600"/>} label="Fait à :" value={formData?.fait_a} onChange={(v: string) => setFormData({...formData, fait_a: v})} />
+               <Field icon={<MapPin size={14} className="text-orange-600"/>} label="Fait à :" value={formData?.fait_a} onChange={(v) => setFormData({...formData, fait_a: v})} />
                
                <div className="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-orange-200 dark:border-orange-900 shadow-sm relative group transition-all">
                   <div className="flex items-center gap-2 mb-2">
@@ -299,7 +355,7 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
                     <input 
                       type="date"
                       className="w-full bg-transparent p-3 rounded-xl font-black outline-none dark:text-white text-xs text-center appearance-none" 
-                      value={formData?.fait_le || ""} 
+                      value={formData?.fait_le || todayStr} 
                       onChange={(e) => setFormData({...formData, fait_le: e.target.value})} 
                     />
                   </div>
@@ -307,15 +363,27 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
             </div>
           </section>
 
+          {/* SECTION 2 - RAPPORT D'ENQUÊTE */}
           <section className="space-y-4">
-            <h4 className="text-xs font-black text-brand uppercase tracking-widest border-b-2 border-brand/10 pb-1">2. RAPPORT D'ENQUÊTE</h4>
-            <Field label="Introduction" value={formData?.rapport_introduction} isTextarea onChange={(v: string) => setFormData({...formData, rapport_introduction: v})} />
-            <Field label="Analyse technique" value={formData?.rapport_analyse_technique} isTextarea onChange={(v: string) => setFormData({...formData, rapport_analyse_technique: v})} />
-            <Field label="Analyse des causes" value={formData?.rapport_analyse_causes} isTextarea onChange={(v: string) => setFormData({...formData, rapport_analyse_causes: v})} />
-            <Field label="Responsabilités (Rapport)" value={formData?.rapport_responsabilites} isTextarea onChange={(v: string) => setFormData({...formData, rapport_responsabilites: v})} />
-            <Field label="Actions correctives" value={formData?.rapport_actions_correctives} isTextarea onChange={(v: string) => setFormData({...formData, rapport_actions_correctives: v})} />
-            <Field label="Recommandations" value={formData?.rapport_recommandations} isTextarea onChange={(v: string) => setFormData({...formData, rapport_recommandations: v})} />
-            <Field label="Conclusion" value={formData?.rapport_conclusion} isTextarea onChange={(v: string) => setFormData({...formData, rapport_conclusion: v})} />
+            <div className="flex items-center justify-between border-b-2 border-brand/10 pb-1">
+              <h4 className="text-xs font-black text-brand uppercase tracking-widest">2. RAPPORT D'ENQUÊTE</h4>
+              <button 
+                onClick={handleRapportIAUpdate}
+                disabled={updatingRapport}
+                className="p-1.5 bg-brand/10 text-brand rounded-lg hover:bg-brand/20 transition-all flex items-center gap-1.5 px-2 disabled:opacity-50"
+                title="Actualiser le rapport à partir des modifications de l'avis"
+              >
+                {updatingRapport ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                <span className="text-[9px] font-black uppercase">{updatingRapport ? "Actualisation..." : "Actualiser via IA"}</span>
+              </button>
+            </div>
+            <Field label="Introduction" value={formData?.rapport_introduction} isTextarea onChange={(v) => setFormData({...formData, rapport_introduction: v})} />
+            <Field label="Analyse technique" value={formData?.rapport_analyse_technique} isTextarea onChange={(v) => setFormData({...formData, rapport_analyse_technique: v})} />
+            <Field label="Analyse des causes" value={formData?.rapport_analyse_causes} isTextarea onChange={(v) => setFormData({...formData, rapport_analyse_causes: v})} />
+            <Field label="Responsabilités (Rapport)" value={formData?.rapport_responsabilites} isTextarea onChange={(v) => setFormData({...formData, rapport_responsabilites: v})} />
+            <Field label="Actions correctives" value={formData?.rapport_actions_correctives} isTextarea onChange={(v) => setFormData({...formData, rapport_actions_correctives: v})} />
+            <Field label="Recommandations" value={formData?.rapport_recommandations} isTextarea onChange={(v) => setFormData({...formData, rapport_recommandations: v})} />
+            <Field label="Conclusion" value={formData?.rapport_conclusion} isTextarea onChange={(v) => setFormData({...formData, rapport_conclusion: v})} />
           </section>
 
           <section className="space-y-4">
@@ -326,7 +394,7 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
                   <ShieldAlert size={14} className="text-brand" />
                   <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest">Statut du dossier</label>
                 </div>
-                <select className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-black outline-none dark:text-white text-sm appearance-none border-2 border-transparent focus:border-brand transition-all" value={formData?.statut} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({...formData, statut: e.target.value as DocStatus})}>
+                <select className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-black outline-none dark:text-white text-sm appearance-none border-2 border-transparent focus:border-brand transition-all" value={formData?.statut} onChange={(e) => setFormData({...formData, statut: e.target.value as DocStatus})}>
                     <option value={DocStatus.SUIVRE} className="dark:bg-slate-900">🚨 À SUIVRE (ACTIF)</option>
                     <option value={DocStatus.CLASSER} className="dark:bg-slate-900">✅ CLASSER (ARCHIVÉ)</option>
                 </select>
@@ -346,7 +414,6 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
                   </div>
                 </div>
                 
-                {/* MODERN SPLIT DATE AND TIME SELECTOR */}
                 <div className="flex gap-3 mb-5">
                     <div className="flex-1 bg-white dark:bg-slate-950 p-4 rounded-2xl border-2 border-brand/10 focus-within:border-brand/40 transition-all flex flex-col items-center shadow-sm">
                         <div className="flex items-center gap-1.5 mb-2">
@@ -373,7 +440,7 @@ export const Scanner: React.FC<ScannerProps> = ({ onSave, onCancel, initialData 
                             className="w-full bg-transparent font-black text-center outline-none text-xs dark:text-white appearance-none"
                             value={formData?.rappel_date?.split('T')[1] || ""}
                             onChange={(e) => {
-                                const date = formData?.rappel_date?.split('T')[0] || new Date().toISOString().split('T')[0];
+                                const date = formData?.rappel_date?.split('T')[0] || todayStr;
                                 setFormData({...formData, rappel_date: `${date}T${e.target.value}`});
                             }}
                         />
@@ -425,9 +492,9 @@ const Field: React.FC<FieldProps> = ({ label, value, onChange, isTextarea, icon 
       <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest">{label}</label>
     </div>
     {isTextarea ? (
-      <textarea className="w-full bg-transparent font-bold outline-none dark:text-white text-xs leading-relaxed" rows={3} value={value || ""} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => onChange(e.target.value)} />
+      <textarea className="w-full bg-transparent font-bold outline-none dark:text-white text-xs leading-relaxed" rows={3} value={value || ""} onChange={(e) => onChange(e.target.value)} />
     ) : (
-      <input className="w-full bg-transparent font-black outline-none dark:text-white text-xs" value={value || ""} onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)} />
+      <input className="w-full bg-transparent font-black outline-none dark:text-white text-xs" value={value || ""} onChange={(e) => onChange(e.target.value)} />
     )}
   </div>
 );
