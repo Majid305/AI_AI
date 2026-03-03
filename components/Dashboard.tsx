@@ -118,7 +118,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onEdit }) => {
             
             currentY += 15;
             pdf.text("Signature du Chef de l'entité", margin + 15, currentY);
-            pdf.text("Signature du Chef de Division", pageWidth - margin - 65, currentY);
+            pdf.text("Signature du Chef de Département", pageWidth - margin - 65, currentY);
 
             pdf.addPage();
             currentY = 20;
